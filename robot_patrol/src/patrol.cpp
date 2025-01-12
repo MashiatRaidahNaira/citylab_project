@@ -56,9 +56,9 @@ private:
     if (closest_distance <= 0.35) {
       direction_ = largest_distance_angle;
       if (closest_distance_angle >= 0.0) {
-        direction_ -= 2.4;
+        direction_ -= 2.5;
       } else {
-        direction_ += 2.4;
+        direction_ += 2.5;
       }
     } else {
       direction_ = 0.0;
