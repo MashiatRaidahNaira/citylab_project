@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.8)
 project(robot_patrol)
 
+# default to C++20
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 20)
+endif()
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -27,8 +32,12 @@ endif()
 add_executable(patrol_node src/patrol.cpp)
 ament_target_dependencies(patrol_node rclcpp sensor_msgs geometry_msgs)
 
+add_executable(direction_service_node src/direction_service.cpp)
+ament_target_dependencies(direction_service_node rclcpp sensor_msgs geometry_msgs custom_interfaces)
+
 install(TARGETS
    patrol_node
+   direction_service_node
    DESTINATION lib/${PROJECT_NAME}
 )
 
