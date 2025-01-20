@@ -81,15 +81,22 @@ private:
       RCLCPP_INFO(this->get_logger(),
                   "Safest direction: Right with total distance: %.2f",
                   total_dist_sec_right);
+      response->direction = "Turn right";
     } else if (total_dist_sec_front >= total_dist_sec_right &&
                total_dist_sec_front >= total_dist_sec_left) {
       RCLCPP_INFO(this->get_logger(),
                   "Safest direction: Front with total distance: %.2f",
                   total_dist_sec_front);
-    } else {
+      response->direction = "Move forward";
+    } else if (total_dist_sec_left >= total_dist_sec_right &&
+               total_dist_sec_left >= total_dist_sec_front) {
       RCLCPP_INFO(this->get_logger(),
                   "Safest direction: Left with total distance: %.2f",
                   total_dist_sec_left);
+      response->direction = "Turn left";
+    } else {
+      RCLCPP_INFO(this->get_logger(), "No valid direction found.");
+      response->direction = "None";
     }
   }
 };
