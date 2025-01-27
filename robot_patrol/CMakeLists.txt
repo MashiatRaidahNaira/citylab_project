@@ -38,10 +38,14 @@ ament_target_dependencies(direction_service_node rclcpp sensor_msgs geometry_msg
 add_executable(test_service_node src/test_service.cpp)
 ament_target_dependencies(test_service_node rclcpp sensor_msgs geometry_msgs custom_interfaces)
 
+add_executable(patrol_with_service_node src/patrol_with_service.cpp)
+ament_target_dependencies(patrol_with_service_node rclcpp sensor_msgs geometry_msgs custom_interfaces)
+
 install(TARGETS
    patrol_node
    direction_service_node
    test_service_node
+   patrol_with_service_node
    DESTINATION lib/${PROJECT_NAME}
 )
 

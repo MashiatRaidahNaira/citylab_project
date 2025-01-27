@@ -2,8 +2,15 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
+#include <map>
+#include <memory>
+#include <ranges>
+#include <string>
+#include <vector>
 
 using namespace std::chrono_literals;
 using GetDirection = custom_interfaces::srv::GetDirection;
@@ -31,7 +38,7 @@ public:
     publisher_ =
         this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
 
-    client = this->create_client<GetDirection>("direction_service");
+    client_ = this->create_client<GetDirection>("direction_service");
   }
 
   bool is_service_done() const { return this->service_done_; }
@@ -53,9 +60,89 @@ private:
 
     auto request = std::make_shared<GetDirection::Request>();
     request->laser_data = *last_laser_;
+
+    auto laser_data = request->laser_data;
+
+    std::vector<float> laser_data_ranges = laser_data.ranges;
+
+    // Define a map to store the regions and their minimum values
+    std::map<std::string, float> regions;
+
+    // Define the region boundaries
+    std::vector<std::pair<int, int>> region_boundaries = {
+        {0, 220}, {220, 440}, {440, 660} // last region ends at 659
+    };
+
+    // Define the region names
+    std::vector<std::string> region_names = {"right", "front", "left"};
+
+    // Process each region and find the minimum value, ensuring it's capped at
+    // 10
+    for (size_t i = 0; i < region_boundaries.size(); ++i) {
+      auto [start, end] = region_boundaries[i];
+      auto subrange = std::ranges::subrange(laser_data_ranges.begin() + start,
+                                            laser_data_ranges.begin() + end);
+      // Use std::ranges::min_element to find the minimum value in the subrange
+      // and cap it at 10
+      regions[region_names[i]] =
+          std::min(*std::ranges::min_element(subrange), 10.0f);
+    }
+
+    // Call take_action with the regions
+    take_action(regions);
+
     auto result_future = client_->async_send_request(
         request,
         std::bind(&Patrol::response_callback, this, std::placeholders::_1));
+  }
+
+  void take_action(const std::map<std::string, float> &regions) {
+    geometry_msgs::msg::Twist twist_msg;
+
+    float linear_x = 0.0;
+    float angular_z = 0.0;
+
+    // Determine the action based on region conditions
+    if (regions.at("front") > 0.35) {
+      RCLCPP_INFO(this->get_logger(), "Service response: Move forward");
+      linear_x = 0.1;
+      angular_z = 0.0;
+    } else if (regions.at("left") < 0.35) {
+      RCLCPP_INFO(this->get_logger(), "Service response: Turn left");
+      linear_x = 0.1;
+      angular_z = 0.5;
+      if (regions.at("front") < 0.35 || regions.at("left") < 0.35 ||
+          regions.at("right") < 0.35) {
+        linear_x = 0.0;
+        angular_z = 0.5;
+      }
+    } else if (regions.at("right") < 0.35) {
+      RCLCPP_INFO(this->get_logger(), "Service response: Turn right");
+      linear_x = 0.1;
+      angular_z = -0.5;
+      if (regions.at("front") < 0.35 || regions.at("left") < 0.35 ||
+          regions.at("right") < 0.35) {
+        linear_x = 0.0;
+        angular_z = 0.5;
+      }
+    } else {
+      RCLCPP_INFO(this->get_logger(), "Service response: Unknown case");
+      if (regions.at("front") < 0.35 || regions.at("left") < 0.35 ||
+          regions.at("right") < 0.35) {
+        linear_x = 0.0;
+        angular_z = 0.4;
+      }
+    }
+
+    twist_msg.linear.x = linear_x;
+    twist_msg.angular.z = angular_z;
+    // Publish the Twist message
+    publisher_->publish(twist_msg);
+
+    // Log the action taken
+    RCLCPP_INFO(this->get_logger(), "Linear velocity: %f", twist_msg.linear.x);
+    RCLCPP_INFO(this->get_logger(), "Angular velocity: %f",
+                twist_msg.angular.z);
   }
 
   void response_callback(rclcpp::Client<GetDirection>::SharedFuture future) {
@@ -67,31 +154,8 @@ private:
     if (status == std::future_status::ready) {
       auto response = future.get();
       service_done_ = true;
-
-      if (response->direction == "Move forward") {
-        RCLCPP_INFO(this->get_logger(), "Service returned Front");
-        twist_msg.linear.x = 0.1;
-        twist_msg.angular.z = 0.0;
-      } else if (response->direction == "Turn right") {
-        RCLCPP_INFO(this->get_logger(), "Service returned Right");
-        twist_msg.linear.x = 0.1;
-        twist_msg.angular.z = -0.5;
-      } else if (response->direction == "Turn left") {
-        RCLCPP_INFO(this->get_logger(), "Service returned Left");
-        twist_msg.linear.x = 0.1;
-        twist_msg.angular.z = 0.5;
-      } else {
-        twist_msg.linear.x = 0.0;
-        twist_msg.angular.z = 0.0;
-      }
-
-      publisher_->publish(twist_msg);
-
-      RCLCPP_INFO(this->get_logger(), "Linear velocity is %f",
-                  twist_msg.linear.x);
-      RCLCPP_INFO(this->get_logger(), "Angular velocity is %f",
-                  twist_msg.linear.z);
-
+      RCLCPP_INFO(this->get_logger(), "Response: %s",
+                  response->direction.c_str());
     } else {
       RCLCPP_WARN(this->get_logger(),
                   "Response not ready yet. Waiting until ready...");
