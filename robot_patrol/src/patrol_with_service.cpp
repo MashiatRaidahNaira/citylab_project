@@ -88,64 +88,16 @@ private:
           std::min(*std::ranges::min_element(subrange), 10.0f);
     }
 
-    // Call take_action with the regions
-    take_action(regions);
-
+    // Use a lambda to bind both the response callback and regions
     auto result_future = client_->async_send_request(
         request,
-        std::bind(&Patrol::response_callback, this, std::placeholders::_1));
+        [this, regions](rclcpp::Client<GetDirection>::SharedFuture future) {
+          this->response_callback(future, regions);
+        });
   }
 
-  void take_action(const std::map<std::string, float> &regions) {
-    geometry_msgs::msg::Twist twist_msg;
-
-    float linear_x = 0.0;
-    float angular_z = 0.0;
-
-    // Determine the action based on region conditions
-    if (regions.at("front") > 0.35) {
-      RCLCPP_INFO(this->get_logger(), "Service response: Move forward");
-      linear_x = 0.1;
-      angular_z = 0.0;
-    } else if (regions.at("left") < 0.35) {
-      RCLCPP_INFO(this->get_logger(), "Service response: Turn left");
-      linear_x = 0.1;
-      angular_z = 0.5;
-      if (regions.at("front") < 0.35 || regions.at("left") < 0.35 ||
-          regions.at("right") < 0.35) {
-        linear_x = 0.0;
-        angular_z = 0.5;
-      }
-    } else if (regions.at("right") < 0.35) {
-      RCLCPP_INFO(this->get_logger(), "Service response: Turn right");
-      linear_x = 0.1;
-      angular_z = -0.5;
-      if (regions.at("front") < 0.35 || regions.at("left") < 0.35 ||
-          regions.at("right") < 0.35) {
-        linear_x = 0.0;
-        angular_z = 0.5;
-      }
-    } else {
-      RCLCPP_INFO(this->get_logger(), "Service response: Unknown case");
-      if (regions.at("front") < 0.35 || regions.at("left") < 0.35 ||
-          regions.at("right") < 0.35) {
-        linear_x = 0.0;
-        angular_z = 0.4;
-      }
-    }
-
-    twist_msg.linear.x = linear_x;
-    twist_msg.angular.z = angular_z;
-    // Publish the Twist message
-    publisher_->publish(twist_msg);
-
-    // Log the action taken
-    RCLCPP_INFO(this->get_logger(), "Linear velocity: %f", twist_msg.linear.x);
-    RCLCPP_INFO(this->get_logger(), "Angular velocity: %f",
-                twist_msg.angular.z);
-  }
-
-  void response_callback(rclcpp::Client<GetDirection>::SharedFuture future) {
+  void response_callback(rclcpp::Client<GetDirection>::SharedFuture future,
+                         const std::map<std::string, float> &regions) {
     geometry_msgs::msg::Twist twist_msg;
 
     // Now check for the response after a timeout of 1 second
@@ -156,9 +108,110 @@ private:
       service_done_ = true;
       RCLCPP_INFO(this->get_logger(), "Response: %s",
                   response->direction.c_str());
+
+      float linear_x = 0.0;
+      float angular_z = 0.0;
+      static int stuck_counter = 0; // Track how long it's stuck
+
+      // Check obstacle conditions
+      bool front_blocked = regions.at("front") < 0.35;
+      bool left_blocked = regions.at("left") < 0.32;
+      bool right_blocked = regions.at("right") < 0.32;
+      bool stuck =
+          (front_blocked && left_blocked) || (front_blocked && right_blocked);
+
+      if (stuck) {
+        stuck_counter++;
+
+        if (stuck_counter >= 3) { // Applying escape maneuver
+          RCLCPP_WARN(this->get_logger(),
+                      "Stuck detected! Forcing a strong right turn.");
+          linear_x = 0.0;
+          angular_z = -1.0;  // Force strong turn to break loop
+          stuck_counter = 0; // Reset counter
+        }
+      } else {
+        stuck_counter = 0; // Reset if no longer stuck
+      }
+
+      // First, process the direction received from the service
+      if (response->direction == "Move forward" || regions.at("front") > 0.35) {
+        RCLCPP_INFO(this->get_logger(), "Service response: Moving forward");
+        linear_x = 0.1;
+        angular_z = 0.0;
+
+        // Adjust based on obstacle conditions
+        if (front_blocked) {
+          linear_x = 0.0;
+          angular_z = -0.5; // Default to turning right
+          RCLCPP_WARN(this->get_logger(), "Obstacle in front, turning right.");
+        }
+      } else if (response->direction == "Turn left" ||
+                 regions.at("left") > 0.35) {
+        RCLCPP_INFO(this->get_logger(), "Service response: Turning left.");
+        linear_x = 0.1;
+        angular_z = 0.5;
+
+        // Adjust based on obstacle conditions
+        if (left_blocked) {
+          angular_z = -0.5; // If left is blocked, turn right
+          RCLCPP_WARN(this->get_logger(), "Obstacle on left, turning right.");
+        }
+        if (front_blocked) {
+          linear_x = 0.0;
+
+          if (right_blocked) {
+            angular_z = 0.5; // Keep turning left if right is also blocked
+            RCLCPP_WARN(this->get_logger(),
+                        "Obstacles in front and right, continuing left turn.");
+          } else {
+            angular_z = -0.5; // Otherwise, turn right
+            RCLCPP_WARN(this->get_logger(),
+                        "Obstacle in front, turning right instead.");
+          }
+        }
+      } else if (response->direction == "Turn right" ||
+                 regions.at("right") > 0.35) {
+        RCLCPP_INFO(this->get_logger(), "Service response: Turning right.");
+        linear_x = 0.1;
+        angular_z = -0.5;
+
+        // Adjust based on obstacle conditions
+        if (right_blocked) {
+          angular_z = 0.5; // If right is blocked, turn left
+          RCLCPP_WARN(this->get_logger(), "Obstacle on right, turning left.");
+        }
+        if (front_blocked) {
+          linear_x = 0.0;
+
+          if (left_blocked) {
+            angular_z = -0.5; // Keep turning right if left is also blocked
+            RCLCPP_WARN(this->get_logger(),
+                        "Obstacles in front and left, continuing right turn.");
+          } else {
+            angular_z = 0.5; // Otherwise, turn left
+            RCLCPP_WARN(this->get_logger(),
+                        "Obstacle in front, turning left instead.");
+          }
+        }
+      } else {
+        RCLCPP_WARN(this->get_logger(), "Unknown direction: %s",
+                    response->direction.c_str());
+        linear_x = 0.0;
+        angular_z = 0.4;
+      }
+
+      // Publish movement command
+      twist_msg.linear.x = linear_x;
+      twist_msg.angular.z = angular_z;
+      publisher_->publish(twist_msg);
+
+      RCLCPP_INFO(this->get_logger(), "Linear velocity: %f",
+                  twist_msg.linear.x);
+      RCLCPP_INFO(this->get_logger(), "Angular velocity: %f",
+                  twist_msg.angular.z);
     } else {
-      RCLCPP_WARN(this->get_logger(),
-                  "Response not ready yet. Waiting until ready...");
+      RCLCPP_WARN(this->get_logger(), "Response not ready yet. Waiting...");
     }
   }
 
