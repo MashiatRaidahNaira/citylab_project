@@ -37,7 +37,7 @@ private:
 
     // Define the section boundaries
     std::vector<std::pair<int, int>> section_boundaries = {
-        {0, 220}, {220, 440}, {440, 660} // last region ends at 659
+        {165, 247}, {248, 412}, {413, 495} // last region ends at 495
     };
 
     // Define the section names
@@ -81,19 +81,19 @@ private:
       RCLCPP_INFO(this->get_logger(),
                   "Safest direction: Right with total distance: %.2f",
                   total_dist_sec_right);
-      response->direction = "Turn right";
+      response->direction = "right";
     } else if (total_dist_sec_front >= total_dist_sec_right &&
                total_dist_sec_front >= total_dist_sec_left) {
       RCLCPP_INFO(this->get_logger(),
                   "Safest direction: Front with total distance: %.2f",
                   total_dist_sec_front);
-      response->direction = "Move forward";
+      response->direction = "forward";
     } else if (total_dist_sec_left >= total_dist_sec_right &&
                total_dist_sec_left >= total_dist_sec_front) {
       RCLCPP_INFO(this->get_logger(),
                   "Safest direction: Left with total distance: %.2f",
                   total_dist_sec_left);
-      response->direction = "Turn left";
+      response->direction = "left";
     } else {
       RCLCPP_INFO(this->get_logger(), "No valid direction found.");
       response->direction = "None";
