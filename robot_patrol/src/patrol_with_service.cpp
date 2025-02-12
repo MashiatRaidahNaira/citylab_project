@@ -70,7 +70,7 @@ private:
 
     // Define the region boundaries
     std::vector<std::pair<int, int>> region_boundaries = {
-        {0, 220}, {220, 440}, {440, 660} // last region ends at 659
+        {165, 247}, {248, 412}, {413, 495} // last region ends at 495
     };
 
     // Define the region names
@@ -109,96 +109,32 @@ private:
       RCLCPP_INFO(this->get_logger(), "Response: %s",
                   response->direction.c_str());
 
-      float linear_x = 0.0;
+      float linear_x = 0.1; // Maintain steady forward motion
       float angular_z = 0.0;
-      static int stuck_counter = 0; // Track how long it's stuck
 
-      // Check obstacle conditions
+      // Thresholds
       bool front_blocked = regions.at("front") < 0.35;
-      bool left_blocked = regions.at("left") < 0.32;
-      bool right_blocked = regions.at("right") < 0.32;
-      bool stuck =
-          (front_blocked && left_blocked) || (front_blocked && right_blocked);
+      bool left_blocked = regions.at("left") < 0.35;
+      bool right_blocked = regions.at("right") < 0.35;
 
-      if (stuck) {
-        stuck_counter++;
-
-        if (stuck_counter >= 3) { // Applying escape maneuver
-          RCLCPP_WARN(this->get_logger(),
-                      "Stuck detected! Forcing a strong right turn.");
-          linear_x = 0.0;
-          angular_z = -1.0;  // Force strong turn to break loop
-          stuck_counter = 0; // Reset counter
-        }
-      } else {
-        stuck_counter = 0; // Reset if no longer stuck
-      }
-
-      // First, process the direction received from the service
-      if (response->direction == "Move forward" || regions.at("front") > 0.35) {
-        RCLCPP_INFO(this->get_logger(), "Service response: Moving forward");
-        linear_x = 0.1;
+      // Modify movement based on direction and obstacle avoidance
+      if (response->direction == "forward" && !front_blocked) {
+        RCLCPP_INFO(this->get_logger(), "Service response: forward");
         angular_z = 0.0;
-
-        // Adjust based on obstacle conditions
-        if (front_blocked) {
-          linear_x = 0.0;
-          angular_z = -0.5; // Default to turning right
-          RCLCPP_WARN(this->get_logger(), "Obstacle in front, turning right.");
-        }
-      } else if (response->direction == "Turn left" ||
-                 regions.at("left") > 0.35) {
-        RCLCPP_INFO(this->get_logger(), "Service response: Turning left.");
-        linear_x = 0.1;
+      } else if (response->direction == "left" && !left_blocked) {
+        RCLCPP_INFO(this->get_logger(), "Service response: left.");
         angular_z = 0.5;
-
-        // Adjust based on obstacle conditions
-        if (left_blocked) {
-          angular_z = -0.5; // If left is blocked, turn right
-          RCLCPP_WARN(this->get_logger(), "Obstacle on left, turning right.");
-        }
-        if (front_blocked) {
-          linear_x = 0.0;
-
-          if (right_blocked) {
-            angular_z = 0.5; // Keep turning left if right is also blocked
-            RCLCPP_WARN(this->get_logger(),
-                        "Obstacles in front and right, continuing left turn.");
-          } else {
-            angular_z = -0.5; // Otherwise, turn right
-            RCLCPP_WARN(this->get_logger(),
-                        "Obstacle in front, turning right instead.");
-          }
-        }
-      } else if (response->direction == "Turn right" ||
-                 regions.at("right") > 0.35) {
-        RCLCPP_INFO(this->get_logger(), "Service response: Turning right.");
-        linear_x = 0.1;
+      } else if (response->direction == "right" && !right_blocked) {
+        RCLCPP_INFO(this->get_logger(), "Service response: right.");
         angular_z = -0.5;
-
-        // Adjust based on obstacle conditions
-        if (right_blocked) {
-          angular_z = 0.5; // If right is blocked, turn left
-          RCLCPP_WARN(this->get_logger(), "Obstacle on right, turning left.");
-        }
-        if (front_blocked) {
-          linear_x = 0.0;
-
-          if (left_blocked) {
-            angular_z = -0.5; // Keep turning right if left is also blocked
-            RCLCPP_WARN(this->get_logger(),
-                        "Obstacles in front and left, continuing right turn.");
-          } else {
-            angular_z = 0.5; // Otherwise, turn left
-            RCLCPP_WARN(this->get_logger(),
-                        "Obstacle in front, turning left instead.");
-          }
-        }
       } else {
         RCLCPP_WARN(this->get_logger(), "Unknown direction: %s",
                     response->direction.c_str());
-        linear_x = 0.0;
-        angular_z = 0.4;
+
+        // If no clear path, turn gradually to avoid walls
+        if (front_blocked) {
+          angular_z = left_blocked ? -0.5 : 0.5;
+        }
       }
 
       // Publish movement command
