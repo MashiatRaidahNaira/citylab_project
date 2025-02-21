@@ -1,12 +1,17 @@
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <thread>
 
+#include "geometry_msgs/msg/detail/pose2_d__struct.hpp"
+#include "nav_msgs/msg/detail/odometry__struct.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 
 #include "custom_interfaces/action/go_to_pose.hpp"
+#include "geometry_msgs/msg/pose2_d.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 
 class GoToPose : public rclcpp::Node {
 public:
@@ -24,12 +29,27 @@ public:
 
     publisher_ =
         this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
+
+    odom1_callback_group_ = this->create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    rclcpp::SubscriptionOptions options1;
+    options1.callback_group = odom1_callback_group_;
+
+    subscription1_ = this->create_subscription<nav_msgs::msg::Odometry>(
+        "odom", 10, std::bind(&GoToPose::odom_callback, this, _1), options1);
+
+    RCLCPP_INFO(this->get_logger(), "GoToPose Action Server initialized!");
   }
 
 private:
   rclcpp_action::Server<GoToPose_i>::SharedPtr action_server_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_;
+  rclcpp::CallbackGroup::SharedPtr odom1_callback_group_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subscription1_;
+
   geometry_msgs::msg::Pose2D desired_pos_;
+  geometry_msgs::msg::Pose2D current_pos_;
 
   rclcpp_action::GoalResponse
   handle_goal(const rclcpp_action::GoalUUID &uuid,
@@ -54,12 +74,22 @@ private:
     std::thread{std::bind(&GoToPose::execute, this, _1), goal_handle}.detach();
   }
 
+  void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    current_pos_.x = msg->pose.pose.position.x;
+    current_pos_.y = msg->pose.pose.position.y;
+
+    // Converting quaternion to Euler angles
+    auto q = msg->pose.pose.orientation;
+    double siny_cosp = 2 * (q.w * q.z + q.x * q.y);
+    double cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
+    current_pos_.theta = std::atan2(siny_cosp, cosy_cosp);
+  }
+
   void execute(const std::shared_ptr<GoalHandleMove> goal_handle) {
     RCLCPP_INFO(this->get_logger(), "Executing goal");
     const auto goal = goal_handle->get_goal();
     auto feedback = std::make_shared<GoToPose_i::Feedback>();
     auto &message = feedback->current_pos;
-    // message = "Starting movement...";
     auto result = std::make_shared<GoToPose_i::Result>();
     auto move = geometry_msgs::msg::Twist();
     rclcpp::Rate loop_rate(1);
