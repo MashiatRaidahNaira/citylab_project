@@ -5,6 +5,7 @@
 
 #include "geometry_msgs/msg/detail/pose2_d__struct.hpp"
 #include "nav_msgs/msg/detail/odometry__struct.hpp"
+#include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 
@@ -87,12 +88,81 @@ private:
 
   void execute(const std::shared_ptr<GoalHandleMove> goal_handle) {
     RCLCPP_INFO(this->get_logger(), "Executing goal");
-    const auto goal = goal_handle->get_goal();
     auto feedback = std::make_shared<GoToPose_i::Feedback>();
     auto &message = feedback->current_pos;
     auto result = std::make_shared<GoToPose_i::Result>();
+
     auto move = geometry_msgs::msg::Twist();
-    rclcpp::Rate loop_rate(1);
+    rclcpp::Rate loop_rate(10);
+
+    double linear_speed = 0.2;
+    double angular_speed = 0.2;
+    double linear_threshold = 0.05;
+    double angular_threshold = 0.05;
+
+    // Convert theta from degrees to radians
+    double desired_theta_rad = desired_pos_.theta * (M_PI / 180.0);
+
+    bool position_reached = false;
+
+    while (rclcpp::ok()) {
+      double dx = desired_pos_.x - current_pos_.x;
+      double dy = desired_pos_.y - current_pos_.y;
+      double distance = std::hypot(dx, dy);
+      // Compute the direction to move towards the goal
+      double target_theta = std::atan2(dy, dx);
+
+      // Control loop for reaching the position
+      if (!position_reached) {
+        double theta_error = target_theta - current_pos_.theta;
+
+        // Normalize theta_error to [-pi, pi]
+        while (theta_error > M_PI)
+          theta_error -= 2.0 * M_PI;
+        while (theta_error < -M_PI)
+          theta_error += 2.0 * M_PI;
+
+        if (distance < linear_threshold) {
+          position_reached = true;
+        }
+
+        // Control movement
+        move.linear.x =
+            (std::abs(theta_error) > angular_threshold) ? 0.0 : linear_speed;
+        move.angular.z = (theta_error > 0) ? angular_speed : -angular_speed;
+      } else {
+        // Position reached, now align to final orientation
+        double orientation_error = desired_theta_rad - current_pos_.theta;
+
+        // Normalize theta_error to [-pi, pi]
+        while (orientation_error > M_PI)
+          orientation_error -= 2.0 * M_PI;
+        while (orientation_error < -M_PI)
+          orientation_error += 2.0 * M_PI;
+
+        if (std::abs(orientation_error) < angular_threshold) {
+          break; // Final orientation achieved, exit loop
+        }
+
+        move.linear.x = 0.0;
+        move.angular.z =
+            (orientation_error > 0) ? angular_speed : -angular_speed;
+      }
+
+      publisher_->publish(move);
+      message = current_pos_;
+      goal_handle->publish_feedback(feedback);
+      loop_rate.sleep();
+    }
+
+    // Stop the robot after reaching goal
+    move.linear.x = 0.0;
+    move.angular.z = 0.0;
+    publisher_->publish(move);
+
+    result->status = true;
+    goal_handle->succeed(result);
+    RCLCPP_INFO(this->get_logger(), "Goal Reached!");
   }
 };
 
